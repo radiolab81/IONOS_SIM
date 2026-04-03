@@ -1,6 +1,6 @@
 # IONOS_SIM - RF propagation simulator based on an extended Watterson model for long and medium wave
 
-This simulator alters audio signals as if they had reached a radio receiver at specific times of day/year via multiple propagation paths over long or medium wave according to ITU-R P.1407, ITU-R F.1487 and ITU-R P.368-9 (ground wave, sky wave). 
+This simulator alters audio signals as if they had reached a radio receiver at specific times of day/year via multiple propagation paths over long or medium wave according to ITU-R P.1407, ITU-R F.1487 and ITU-R P.368 (ground wave, sky wave). 
 
 ![UI1](https://github.com/radiolab81/IONOS_SIM/blob/main/www/mainui.jpg "main UI")
 
