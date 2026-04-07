@@ -60,6 +60,16 @@ ITU_PROFILES = [
     {"name": "Equatorial Flutter", "delays": [0.0, 0.8, 1.6], "spread": 20.0}
 ]
 
+
+# ITU-R P.372 - impulsive noise / sferics
+SFERICS_CFG = [
+     # --- (Pulse Frequency, Pulse Amplitude) ---
+     (0, 0),  
+     (0.000002, 1.5),    # 1: ITU-R P.372 LOW
+     (0.00008,  2.8),    # 2: ETSI DRM TYPICAL
+     (0.001,    5.5)     # 3: MIL-STD-188
+]
+
 class RadioEngine:
     def __init__(self):
         self.proc_in = None
@@ -88,6 +98,9 @@ class RadioEngine:
         self.z_real = np.zeros(4)
         self.z_imag = np.zeros(4)
 
+        self.storm_mode = 0      
+        self.sferic_timer = 0    
+        self.sferic_amp = 0.0
 
     def set_source(self, source_type, path):
         # 1. terminate old input source
@@ -184,16 +197,54 @@ class RadioEngine:
         self.iq_history = np.concatenate((self.iq_history[CHUNK:], sig_iq))
         self.t_total += CHUNK / FS_IN
         
-        # --- NOISE (atmospheric) ---
-        white = (np.random.normal(0, 0.012, CHUNK) + 1j * np.random.normal(0, 0.012, CHUNK))
-        pink = np.zeros(CHUNK, dtype=complex)
-        for i in range(CHUNK):
-            self.noise_state = 0.99 * self.noise_state + 0.01 * white[i]
-            pink[i] = self.noise_state
 
         # --- scaling for physics ---
         total_v = sum(v_f) + 1e-9
         sc = 0.7 / total_v if total_v > 0.7 else 1.0
+
+
+        # --- NOISE (atmospheric) ---
+        white = (np.random.normal(0, 0.012, CHUNK) + 1j * np.random.normal(0, 0.012, CHUNK))
+        pink = np.zeros(CHUNK, dtype=complex)
+        
+        if self.storm_mode == 0:
+           # ORIGINAL-CODE (sferics off)
+           for i in range(CHUNK):
+            self.noise_state = 0.99 * self.noise_state + 0.01 * white[i]
+            pink[i] = self.noise_state
+
+        else: # --- sferics on ---
+            p_strike, max_amp = SFERICS_CFG[self.storm_mode]
+            
+            is_lw = freq_khz < 300
+            roll_off = 0.998 if is_lw else 0.993
+            f_scale = 3.5 if is_lw else 1.0
+            
+            # sun elevation < 0, boost up sferics 
+            night_boost = 1.8 if sun_elev < 0 else 1.0
+   
+            for i in range(CHUNK):
+                self.noise_state = 0.99 * self.noise_state + 0.01 * white[i]
+                pink[i] = self.noise_state
+        
+                w = pink[i] * sc
+
+                if self.sferic_timer <= 0:
+                    if random.random() < p_strike:
+                        t_cfg = [0, (60, 200), (300, 900), (1000, 4500)]
+                        t_min, t_max = t_cfg[self.storm_mode]
+                        self.sferic_timer = random.randint(t_min, t_max)
+                        # use sc, to stay ALWAYS on top of signal
+                        self.sferic_amp = random.uniform(0.8, max_amp) * f_scale * sc * night_boost
+                
+                if self.sferic_timer > 0:
+                    w += (random.gauss(0, self.sferic_amp) + 1j * random.gauss(0, self.sferic_amp))
+                    self.sferic_timer -= 1
+                
+                self.noise_state = roll_off * self.noise_state + (1.0 - roll_off) * w
+                pink[i] = self.noise_state
+
+
 
         # 2. MULTI-PATH (phase-continuous by history-buffer) according ITU profiles
         sig_total_iq = (v_f[0] * sc) * sig_iq
@@ -454,10 +505,18 @@ def draw_ui(stdscr):
         
         # controls
         draw_rect(stdscr,0,19,100,6,'Controls');
+        sferic_labels = [
+            "OFF",                              # 0
+            "ITU-R P.372 (Quiet/Rural)",        # 1 (0.000002 / 1.5)
+            "ETSI DRM (Typical Case)",          # 2 (0.00008  / 2.8)
+            "MIL-STD-188 (Worst Case)"          # 3 (0.001    / 5.5)
+        ]
+        sferic_text = sferic_labels[engine.storm_mode]
         stdscr.addstr(20, 2, "[1-9] TX presets        [G] ground conductivity  [W] TX Frequency  [L] TX Power  [P] Profile")
         stdscr.addstr(21, 2, "[I] src: Internetradio  [C] src: Soundcard       [O] src: File     [B/T] Time    [F/S] Speed")
-        stdscr.addstr(22, 2, "[U] Select sink                                                                            ")
+        stdscr.addstr(22, 2, f"[U] Select sink         [M] SFERICS: {sferic_text:<10}                         ")
         stdscr.addstr(23, 2, "[R] Reset               [Q] Quit")
+  
 
         key = stdscr.getch()
         if key == ord('q'): break
@@ -502,6 +561,7 @@ def draw_ui(stdscr):
                     engine.set_source("FILE", full_p)
                     break
 
+        elif key in [ord('m'), ord('M')]: engine.storm_mode = (engine.storm_mode + 1) % 4
         elif key == ord('p'): itu_idx = (itu_idx + 1) % len(ITU_PROFILES)
         elif key == ord('g'): sig_idx = (sig_idx + 1) % len(SIGMA_TYPES)
         elif key == ord('w'): f_idx = (f_idx + 1) % len(FREQS)
