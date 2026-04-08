@@ -1,9 +1,9 @@
 import ephem, time, math, curses, os, random, subprocess, sys
 import numpy as np
 from noise import pnoise1
-#from scipy.signal import hilbert
 import os
 import sounddevice as sd
+import atexit
 
 # --- CONFIGURATION ---
 RECV_LOC = {"name": "Frankfurt/Main", "lat": "50.1109", "lon": "8.6821"}
@@ -102,6 +102,27 @@ class RadioEngine:
         self.sferic_timer = 0    
         self.sferic_amp = 0.0
 
+    def cleanup(self):
+        for p in [self.proc_in, self.proc_out]:
+            if p:
+                try:
+                    # close pipes
+                    if p.stdin: p.stdin.close()
+                    if p.stdout: p.stdout.close()
+                    p.terminate()  # friendly (SIGTERM)
+                except:
+                    pass
+        
+        # wait, check if still alife
+        for p in [self.proc_in, self.proc_out]:
+            if p and p.poll() is None:
+                try:
+                    p.wait(timeout=0.2)
+                except:
+                    try: p.kill() # the hard way (SIGKILL)
+                    except: pass
+
+
     def set_source(self, source_type, path):
         # 1. terminate old input source
         if self.proc_in:
@@ -179,7 +200,7 @@ class RadioEngine:
         am_real = 1.0 + 0.8 * data
         
         # baseband AM Signal simply S(t) = (1+m*a(t)).
-        # IQ-äquivalent in complex baseband is (1+m*a(t)) + 0j.
+        # IQ-equivalent in complex baseband is (1+m*a(t)) + 0j.
         # iono phase-rotation do the job
         sig_iq.real = am_real
         sig_iq.imag = 0.0 # baseband AM-TX doesnt need imag signal part 
@@ -367,8 +388,6 @@ def load_stations(filename="stations.db"):
     return stations if stations else [{"name": "list empty", "url": ""}]
 
 
-
-
 def draw_rect(stdscr, x, y, w, h, title=""):
     """ drawing a frame, check if terminal is to small """
     max_y, max_x = stdscr.getmaxyx()
@@ -400,6 +419,7 @@ def draw_rect(stdscr, x, y, w, h, title=""):
 
 def draw_ui(stdscr):
     engine = RadioEngine()
+    atexit.register(engine.cleanup)
     engine.set_source("URL", "https://47fm.ice.infomaniak.ch/47fm-80.aac") 
     p_idx, s_idx, sig_idx, f_idx, t_speed, iono_curr = 4, 1, 1, 2, 1.0, 0.0001
     curses.curs_set(0); stdscr.nodelay(1); stdscr.timeout(5); last_t = time.time()
@@ -633,6 +653,8 @@ def draw_ui(stdscr):
                     engine.set_output(out_type="DEFAULT", target="default")
 
         stdscr.refresh()
+
+
 
 if __name__ == "__main__":
     try:
